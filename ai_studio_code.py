@@ -8,7 +8,6 @@ import ast # Safe way to read lists stored as strings in CSV
 st.set_page_config(page_title="Ace Performance", page_icon="⚾", layout="wide")
 
 # --- DATA FILES ---
-# We use CSVs for simplicity. In a real app, these would be database connections.
 FILES = {
     "schedule": "schedule_data.csv",
     "routines": "routines_library.csv",
@@ -20,104 +19,167 @@ FILES = {
 # --- FUNCTIONS ---
 def load_data(key):
     if not os.path.exists(FILES[key]):
-        # Initialize empty dataframes with correct columns
         if key == "routines":
-            return pd.DataFrame(columns=["Routine Name", "Type", "Exercises"]) # 'Exercises' will hold a list of dicts
+            # Structure: Routine Name | Type | Exercises (List of Dicts)
+            return pd.DataFrame(columns=["Routine Name", "Type", "Exercises"])
         elif key == "schedule":
             return pd.DataFrame(columns=["Date", "Throwing Routine", "Lifting Routine", "Custom Notes"])
         return pd.DataFrame()
     return pd.read_csv(FILES[key])
 
-def save_data(key, new_row_dict):
+def save_full_dataframe(key, df):
+    """Overwrites the entire CSV with the new dataframe (used for edits/deletes)"""
+    df.to_csv(FILES[key], index=False)
+
+def append_data(key, new_row_dict):
+    """Appends a single row to the CSV"""
     df = load_data(key)
     new_df = pd.DataFrame([new_row_dict])
     updated_df = pd.concat([df, new_df], ignore_index=True)
     updated_df.to_csv(FILES[key], index=False)
-    return updated_df
 
 # --- SIDEBAR ---
 st.sidebar.title("⚾ Ace Performance")
 page = st.sidebar.radio("Menu", [
     "Daily Dashboard", 
-    "Routine Builder",   
+    "Routine Manager",   # Renamed
     "Assign Schedule",   
     "Track Lifts", 
     "Track Velocity", 
     "Track Bodyweight"
 ])
 
-# --- 1. ROUTINE BUILDER (UPDATED) ---
-if page == "Routine Builder":
-    st.title("🛠️ Create Standard Routines")
-    st.info("Build a routine by adding exercises one by one. When finished, give it a name and save.")
+# ==========================================
+# PAGE: ROUTINE MANAGER (Create / Edit / Delete)
+# ==========================================
+if page == "Routine Manager":
+    st.title("🛠️ Routine Manager")
+    
+    tab1, tab2 = st.tabs(["➕ Create New", "✏️ Edit / Delete"])
 
-    # Session State to hold the current routine being built
-    if "current_routine" not in st.session_state:
-        st.session_state.current_routine = []
+    # --- TAB 1: CREATE NEW ROUTINE ---
+    with tab1:
+        st.subheader("Build a New Routine")
+        
+        # We use a temporary dataframe in session state to build the list
+        if "new_routine_rows" not in st.session_state:
+            st.session_state.new_routine_rows = []
 
-    col1, col2 = st.columns([1, 2])
-
-    with col1:
-        st.subheader("Add Exercise")
-        with st.form("add_exercise"):
-            ex_name = st.text_input("Exercise Name", placeholder="e.g. Back Squat")
-            c1, c2 = st.columns(2)
-            sets = c1.text_input("Sets", placeholder="3")
-            reps = c2.text_input("Reps", placeholder="5")
-            c3, c4 = st.columns(2)
-            weight = c3.text_input("Weight/Intensity", placeholder="75% or 225lbs")
-            rpe = c4.text_input("RPE", placeholder="8")
-            tempo = st.text_input("Tempo", placeholder="3-0-X-1")
+        # 1. Add Exercises Form
+        with st.expander("Add Exercise Inputs", expanded=True):
+            c1, c2, c3 = st.columns([2, 1, 1])
+            ex_name = c1.text_input("Exercise Name", key="new_ex")
+            sets = c2.text_input("Sets", key="new_sets")
+            reps = c3.text_input("Reps", key="new_reps")
             
-            add_btn = st.form_submit_button("Add to List")
-            
-            if add_btn and ex_name:
-                st.session_state.current_routine.append({
-                    "Exercise": ex_name,
-                    "Sets": sets,
-                    "Reps": reps,
-                    "Weight": weight,
-                    "RPE": rpe,
-                    "Tempo": tempo
-                })
-                st.success(f"Added {ex_name}")
+            c4, c5, c6 = st.columns([1, 1, 1])
+            weight = c4.text_input("Weight", key="new_weight")
+            rpe = c5.text_input("RPE", key="new_rpe")
+            tempo = c6.text_input("Tempo", key="new_tempo")
 
-    with col2:
-        st.subheader("Current Routine Preview")
-        if len(st.session_state.current_routine) > 0:
-            # Show what we have so far as a table
-            preview_df = pd.DataFrame(st.session_state.current_routine)
-            st.table(preview_df)
+            if st.button("Add to List"):
+                if ex_name:
+                    st.session_state.new_routine_rows.append({
+                        "Exercise": ex_name, "Sets": sets, "Reps": reps, 
+                        "Weight": weight, "RPE": rpe, "Tempo": tempo
+                    })
+                else:
+                    st.error("Exercise Name is required.")
+
+        # 2. Preview & Save
+        if len(st.session_state.new_routine_rows) > 0:
+            st.write("### Preview (You can edit this table directly before saving)")
             
-            # Save the whole routine
-            with st.form("save_routine"):
-                r_name = st.text_input("Routine Name (e.g. Hypertrophy A)")
-                r_type = st.selectbox("Type", ["Lifting", "Throwing"])
-                save_btn = st.form_submit_button("💾 Save Routine to Library")
-                
-                if save_btn and r_name:
-                    # Convert list of dicts to string to store in CSV
-                    exercises_str = str(st.session_state.current_routine)
-                    save_data("routines", {
+            # Create a DataFrame from the list
+            df_preview = pd.DataFrame(st.session_state.new_routine_rows)
+            
+            # Allow user to edit the preview (delete rows, fix typos)
+            edited_df = st.data_editor(df_preview, num_rows="dynamic", key="create_editor")
+
+            st.divider()
+            col_a, col_b = st.columns(2)
+            with col_a:
+                r_name = st.text_input("Routine Name (e.g., Upper Hypertrophy)")
+            with col_b:
+                r_type = st.selectbox("Routine Type", ["Lifting", "Throwing"])
+
+            if st.button("💾 Save New Routine"):
+                if r_name:
+                    # Convert the edited dataframe back to a list of dicts
+                    final_exercises = edited_df.to_dict('records')
+                    
+                    append_data("routines", {
                         "Routine Name": r_name,
                         "Type": r_type,
-                        "Exercises": exercises_str
+                        "Exercises": str(final_exercises) # Save as string
                     })
-                    st.success(f"Saved Routine: {r_name}")
-                    # Reset
-                    st.session_state.current_routine = []
+                    st.success(f"Saved '{r_name}'!")
+                    st.session_state.new_routine_rows = [] # Clear form
                     st.rerun()
+                else:
+                    st.error("Please name the routine.")
+
+    # --- TAB 2: EDIT / DELETE EXISTING ---
+    with tab2:
+        st.subheader("Manage Existing Routines")
+        
+        df_library = load_data("routines")
+        
+        if df_library.empty:
+            st.info("No routines found. Go to 'Create New' first.")
         else:
-            st.write("No exercises added yet.")
+            # Select Routine
+            routine_names = df_library["Routine Name"].unique()
+            selected_routine_name = st.selectbox("Select Routine to Edit", routine_names)
+            
+            # Get the row for this routine
+            current_row = df_library[df_library["Routine Name"] == selected_routine_name].iloc[0]
+            
+            # Parse the exercises string back into a list/dataframe
+            try:
+                current_exercises = ast.literal_eval(current_row["Exercises"])
+                df_exercises = pd.DataFrame(current_exercises)
+            except:
+                df_exercises = pd.DataFrame(columns=["Exercise", "Sets", "Reps"])
 
-    st.divider()
-    st.subheader("Existing Library")
-    df_lib = load_data("routines")
-    if not df_lib.empty:
-        st.dataframe(df_lib[["Routine Name", "Type"]])
+            st.write(f"**Editing:** {selected_routine_name} ({current_row['Type']})")
+            
+            # EDITABLE TABLE
+            # num_rows="dynamic" allows you to add or delete rows directly in the UI
+            updated_exercises_df = st.data_editor(
+                df_exercises, 
+                num_rows="dynamic", 
+                use_container_width=True,
+                key="edit_editor"
+            )
+            
+            col_save, col_del = st.columns([1, 1])
+            
+            # UPDATE BUTTON
+            with col_save:
+                if st.button("✅ Update Routine"):
+                    # Convert back to list of dicts
+                    updated_list = updated_exercises_df.to_dict('records')
+                    
+                    # Update the specific row in the main dataframe
+                    df_library.loc[df_library["Routine Name"] == selected_routine_name, "Exercises"] = str(updated_list)
+                    
+                    # Save to CSV
+                    save_full_dataframe("routines", df_library)
+                    st.success("Routine updated successfully!")
+            
+            # DELETE BUTTON
+            with col_del:
+                if st.button("🗑️ Delete Routine", type="primary"):
+                    # Filter out the selected routine
+                    df_library = df_library[df_library["Routine Name"] != selected_routine_name]
+                    save_full_dataframe("routines", df_library)
+                    st.success(f"Deleted {selected_routine_name}")
+                    st.rerun()
 
-
-# --- 2. ASSIGN SCHEDULE (SAME AS BEFORE) ---
+# ==========================================
+# PAGE: ASSIGN SCHEDULE
+# ==========================================
 elif page == "Assign Schedule":
     st.title("🗓️ Plan Your Month")
     
@@ -140,7 +202,8 @@ elif page == "Assign Schedule":
         notes = st.text_input("Custom Notes")
         
         if st.form_submit_button("Assign"):
-            save_data("schedule", {
+            # Simple append logic (The dashboard always reads the LAST entry for a specific date)
+            append_data("schedule", {
                 "Date": date,
                 "Throwing Routine": selected_throw,
                 "Lifting Routine": selected_lift,
@@ -148,8 +211,9 @@ elif page == "Assign Schedule":
             })
             st.success(f"Schedule updated for {date}")
 
-
-# --- 3. DAILY DASHBOARD (UPDATED FOR STRUCTURED DATA) ---
+# ==========================================
+# PAGE: DAILY DASHBOARD
+# ==========================================
 elif page == "Daily Dashboard":
     st.title("📅 Today's Training")
     today_str = datetime.date.today().strftime("%Y-%m-%d")
@@ -162,21 +226,19 @@ elif page == "Daily Dashboard":
     if not today_plan.empty:
         plan = today_plan.iloc[-1] 
         
-        # --- LIFTING SECTION ---
+        # --- LIFTING ---
         st.markdown(f"### 🏋️ Lifting: {plan['Lifting Routine']}")
         if plan['Lifting Routine'] != "Rest Day":
-            # Find the routine data
             row = df_routines[df_routines["Routine Name"] == plan['Lifting Routine']]
             if not row.empty:
-                # Parse the string representation of list back into a list
                 ex_list = ast.literal_eval(row.iloc[0]["Exercises"])
                 st.table(pd.DataFrame(ex_list))
             else:
-                st.error("Routine not found in library.")
+                st.error("Routine not found (it might have been deleted).")
         
         st.divider()
 
-        # --- THROWING SECTION ---
+        # --- THROWING ---
         st.markdown(f"### ⚾ Throwing: {plan['Throwing Routine']}")
         if plan['Throwing Routine'] != "Rest Day":
             row = df_routines[df_routines["Routine Name"] == plan['Throwing Routine']]
@@ -184,28 +246,28 @@ elif page == "Daily Dashboard":
                 ex_list = ast.literal_eval(row.iloc[0]["Exercises"])
                 st.table(pd.DataFrame(ex_list))
             else:
-                st.error("Routine not found in library.")
+                st.error("Routine not found.")
 
         if pd.notna(plan['Custom Notes']) and plan['Custom Notes']:
-            st.warning(f"📝 **Coach Notes:** {plan['Custom Notes']}")
+            st.info(f"📝 **Coach Notes:** {plan['Custom Notes']}")
 
     else:
         st.info("No workout scheduled for today.")
 
-
-# --- 4. TRACKING PAGES (Standard) ---
+# ==========================================
+# PAGE: TRACKING (Lifts, Velo, Bodyweight)
+# ==========================================
 elif page == "Track Lifts":
     st.title("🏋️ Log Lifts")
     with st.form("lift"):
         date = st.date_input("Date", datetime.date.today())
-        # In a real app, we could dynamically populate this list from your Routine Builder exercises
         exercise = st.text_input("Exercise Name") 
         weight = st.number_input("Weight Used", step=2.5)
         reps = st.number_input("Reps Performed", step=1)
         if st.form_submit_button("Log Set"):
-            save_data("lifts", {"Date": date, "Exercise": exercise, "Weight": weight, "Reps": reps})
+            append_data("lifts", {"Date": date, "Exercise": exercise, "Weight": weight, "Reps": reps})
             st.success("Logged")
-            
+    
     df = load_data("lifts")
     if not df.empty:
         st.subheader("History")
@@ -217,7 +279,7 @@ elif page == "Track Velocity":
         date = st.date_input("Date", datetime.date.today())
         velo = st.number_input("Max Velo (MPH)", step=0.1)
         if st.form_submit_button("Log"):
-            save_data("velo", {"Date": date, "Velo": velo})
+            append_data("velo", {"Date": date, "Velo": velo})
             st.success("Logged")
     df = load_data("velo")
     if not df.empty:
@@ -229,7 +291,7 @@ elif page == "Track Bodyweight":
         date = st.date_input("Date", datetime.date.today())
         bw = st.number_input("Weight (lbs)", step=0.1)
         if st.form_submit_button("Log"):
-            save_data("bodyweight", {"Date": date, "Weight": bw})
+            append_data("bodyweight", {"Date": date, "Weight": bw})
             st.success("Logged")
     df = load_data("bodyweight")
     if not df.empty:
