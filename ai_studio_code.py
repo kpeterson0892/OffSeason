@@ -79,42 +79,36 @@ def append_data(key, new_row_dict):
     updated_df.to_csv(FILES[key], index=False)
 
 # ==========================================
-# 3. FIXED PARSER FOR NIPPARD SHEET
+# 3. UPDATED PARSER (ALL COLUMNS)
 # ==========================================
 def parse_nippard_csv(file):
     """
-    Parses the Jeff Nippard Powerbuilding CSV structure.
-    Adjusted for CSVs where Column A is empty and data starts in Column B.
+    Parses ALL columns from the Jeff Nippard sheet.
+    Captures: Exercise, Warm-up, Working, Reps, Load, %1RM, RPE, Rest, Notes
     """
-    # Read without header because the header is messy
     df = pd.read_csv(file, header=None)
     
     extracted_routines = []
-    
-    current_week = "Week 1" # Default
+    current_week = "Week 1"
     current_routine_name = None
     current_exercises = []
     
-    # Iterate through every row
     for index, row in df.iterrows():
-        # Col A (0) is usually empty in your file
-        # Col B (1) contains Week info or Routine Names
-        # Col C (2) contains Exercise Names
+        # Map CSV Columns based on your file structure
+        val_A = str(row[0]).strip() # Empty usually
+        val_B = str(row[1]).strip() # Week or Routine Name
+        val_C = str(row[2]).strip() # Exercise
         
-        val_1 = str(row[1]).strip() # Column B
-        val_2 = str(row[2]).strip() # Column C (Exercise)
-        
-        # 1. Detect Week Change (e.g., "Week 1", "Week 2")
-        if "Week" in val_1 and len(val_1) < 15:
-            current_week = val_1
+        # 1. Detect Week
+        if "Week" in val_B and len(val_B) < 15:
+            current_week = val_B
             continue
 
         # 2. Detect New Session 
-        # It is a session if Col B has text, but it is NOT "Week" and NOT "Exercise"
-        # Also ignoring metadata rows
-        if val_1 != "nan" and val_1 != "" and "Week" not in val_1 and "Exercise" not in val_1 and "IMPORTANT" not in val_1:
+        # Valid session if Col B has text, is not "Week", "Exercise", or "IMPORTANT"
+        if val_B != "nan" and val_B != "" and "Week" not in val_B and "Exercise" not in val_B and "IMPORTANT" not in val_B:
             
-            # Save previous routine if exists
+            # Save previous routine
             if current_routine_name and current_exercises:
                 extracted_routines.append({
                     "Routine Name": current_routine_name,
@@ -123,38 +117,24 @@ def parse_nippard_csv(file):
                 })
             
             # Start new routine
-            clean_name = val_1.split(":")[0] # Remove description after colon
+            clean_name = val_B.split(":")[0]
             current_routine_name = f"{current_week} - {clean_name}"
             current_exercises = []
             
-            # CRITICAL: In your sheet, the first exercise is often on the SAME ROW as the routine name (in Col C)
-            if val_2 != "nan" and val_2 != "" and val_2 != "Exercise":
-                 # Col E (4) = Working Sets, F (5) = Reps, G (6) = Load
-                ex_obj = {
-                    "Exercise": val_2,
-                    "Sets": str(row[4]) if str(row[4]) != "nan" else "3",
-                    "Reps": str(row[5]) if str(row[5]) != "nan" else "10",
-                    "Weight": str(row[6]) if str(row[6]) != "nan" else "-"
-                }
+            # Check if first exercise is on the same row (Col C)
+            if val_C != "nan" and val_C != "" and val_C != "Exercise":
+                ex_obj = extract_exercise_row(row)
                 current_exercises.append(ex_obj)
             continue
 
-        # 3. Detect Exercise Rows (Col B is empty, Col C has exercise)
-        if (val_1 == "nan" or val_1 == "") and (val_2 != "nan" and val_2 != ""):
-            # Skip headers
-            if "Exercise" in val_2 or "Warm-up" in val_2:
-                continue
-                
-            # It's an exercise
-            ex_obj = {
-                "Exercise": val_2,
-                "Sets": str(row[4]) if str(row[4]) != "nan" else "3",
-                "Reps": str(row[5]) if str(row[5]) != "nan" else "10",
-                "Weight": str(row[6]) if str(row[6]) != "nan" else "-"
-            }
+        # 3. Detect Exercise Rows
+        if (val_B == "nan" or val_B == "") and (val_C != "nan" and val_C != ""):
+            if "Exercise" in val_C or "Warm-up" in val_C: continue
+            
+            ex_obj = extract_exercise_row(row)
             current_exercises.append(ex_obj)
 
-    # Save the final routine found
+    # Save final routine
     if current_routine_name and current_exercises:
         extracted_routines.append({
             "Routine Name": current_routine_name,
@@ -163,6 +143,24 @@ def parse_nippard_csv(file):
         })
         
     return extracted_routines
+
+def extract_exercise_row(row):
+    """Helper to safely pull all columns from a row"""
+    def safe_str(val):
+        s = str(val).strip()
+        return "" if s == "nan" else s
+
+    return {
+        "Exercise": safe_str(row[2]),
+        "Warmup Sets": safe_str(row[3]),
+        "Working Sets": safe_str(row[4]),
+        "Reps": safe_str(row[5]),
+        "Load": safe_str(row[6]),
+        "Percent": safe_str(row[7]),
+        "RPE": safe_str(row[8]),
+        "Rest": safe_str(row[9]),
+        "Notes": safe_str(row[10])
+    }
 
 # ==========================================
 # 4. NAVIGATION
@@ -190,7 +188,7 @@ if page == "Today's Plan":
         st.stop()
     plan = today_plan.iloc[0]
 
-    # TOP CARDS
+    # CARDS
     with st.container(border=True):
         c1, c2 = st.columns(2)
         with c1:
@@ -237,16 +235,12 @@ if page == "Today's Plan":
         if l_plan:
             st.markdown(f"## {l_plan}")
             
-            # 1. Exact Match Check
+            # Match Routine
             routine_row = df_routines[df_routines["Routine Name"] == l_plan]
-            
-            # 2. Fuzzy Match / Short Name Check (e.g. User has 'FB1' in schedule but 'Week 1 - Full Body 1' in library)
             if routine_row.empty:
-                # Try to find a routine that CONTAINS this text
+                # Fuzzy Match
                 mask = df_routines["Routine Name"].str.contains(l_plan, case=False, na=False)
-                if mask.any():
-                    routine_row = df_routines[mask].iloc[[0]] # Take first match
-                    st.info(f"Matched short name '{l_plan}' to '{routine_row.iloc[0]['Routine Name']}'")
+                if mask.any(): routine_row = df_routines[mask].iloc[[0]]
             
             if not routine_row.empty:
                 try:
@@ -258,16 +252,40 @@ if page == "Today's Plan":
                         ex_name = ex.get("Exercise", "Unknown")
                         match = existing_logs[existing_logs["Exercise"] == ex_name]
                         
+                        # Build Row with ALL details
                         display_rows.append({
                             "Exercise": ex_name,
-                            "Sets": ex.get("Sets", "3"),
-                            "Reps": ex.get("Reps", "10"),
-                            "Target": ex.get("Weight", "-"),
+                            "Warm": ex.get("Warmup Sets", ""),
+                            "Work": ex.get("Working Sets", ""),
+                            "Reps": ex.get("Reps", ""),
+                            "Load (lbs)": ex.get("Load", ""),
+                            "%1RM": ex.get("Percent", ""),
+                            "RPE": ex.get("RPE", ""),
+                            "Rest": ex.get("Rest", ""),
+                            "Notes": ex.get("Notes", ""),
                             "Actual Wt": float(match.iloc[0]["Actual Weight"]) if not match.empty else 0.0,
                             "Done": not match.empty
                         })
                     
-                    edited_df = st.data_editor(pd.DataFrame(display_rows), hide_index=True, use_container_width=True)
+                    # Configure the Editor to show everything cleanly
+                    edited_df = st.data_editor(
+                        pd.DataFrame(display_rows),
+                        column_config={
+                            "Exercise": st.column_config.TextColumn(width="medium", disabled=True),
+                            "Warm": st.column_config.TextColumn("Warm Sets", width="small", disabled=True),
+                            "Work": st.column_config.TextColumn("Work Sets", width="small", disabled=True),
+                            "Reps": st.column_config.TextColumn(width="small", disabled=True),
+                            "Load (lbs)": st.column_config.TextColumn(width="small", disabled=True),
+                            "%1RM": st.column_config.TextColumn(width="small", disabled=True),
+                            "RPE": st.column_config.TextColumn(width="small", disabled=True),
+                            "Rest": st.column_config.TextColumn(width="small", disabled=True),
+                            "Notes": st.column_config.TextColumn(width="large", disabled=True),
+                            "Actual Wt": st.column_config.NumberColumn("Log Wt", min_value=0, step=5),
+                            "Done": st.column_config.CheckboxColumn(width="small")
+                        },
+                        hide_index=True, 
+                        use_container_width=True
+                    )
                     
                     if st.button("💾 Save Lift"):
                         df_clean = df_logs[~((df_logs["Date"] == view_str) & (df_logs["Routine Name"] == l_plan))]
@@ -275,13 +293,14 @@ if page == "Today's Plan":
                         for _, row in edited_df.iterrows():
                             new_rows.append({
                                 "Date": view_str, "Routine Name": l_plan, "Exercise": row["Exercise"],
-                                "Set #": 1, "Prescribed Weight": row["Target"], "Actual Weight": row["Actual Wt"], "Actual Reps": 0
+                                "Set #": 1, "Prescribed Weight": row["Load (lbs)"], 
+                                "Actual Weight": row["Actual Wt"], "Actual Reps": 0
                             })
                         save_data("logs", pd.concat([df_clean, pd.DataFrame(new_rows)], ignore_index=True))
                         st.success("Saved!")
                 except: st.error("Error parsing routine.")
             else:
-                st.warning(f"Routine '{l_plan}' not found. Check 'Routine Library' to see exact names.")
+                st.warning(f"Routine '{l_plan}' not found. Please check Routine Library names.")
         else:
             st.markdown("## Rest Day")
 
@@ -292,7 +311,6 @@ elif page == "Monthly Schedule":
     st.title("🗓️ Schedule Editor")
     df_sched = load_data("schedule")
     df_routines = load_data("routines")
-    
     lift_opts = [""] + sorted([r for r in df_routines["Routine Name"].unique()])
     
     col_d, col_t = st.columns([1, 3])
@@ -300,7 +318,6 @@ elif page == "Monthly Schedule":
         view_dt = st.date_input("Month", datetime.date.today())
         start = view_dt.replace(day=1)
         end = (start + pd.DateOffset(months=1)) - pd.DateOffset(days=1)
-    
     mask = (pd.to_datetime(df_sched['Date']) >= pd.to_datetime(start)) & (pd.to_datetime(df_sched['Date']) <= pd.to_datetime(end))
     df_view = df_sched.loc[mask].copy()
     
@@ -313,7 +330,6 @@ elif page == "Monthly Schedule":
         },
         hide_index=True, use_container_width=True, height=600
     )
-    
     if st.button("💾 Save Changes"):
         df_sched.set_index("Date", inplace=True)
         edited.set_index("Date", inplace=True)
@@ -330,11 +346,9 @@ elif page == "Routine Library":
     df = load_data("routines")
     st.dataframe(df[["Routine Name", "Type"]], use_container_width=True)
     
-    st.subheader("Delete Routine")
-    d_sel = st.selectbox("Select Routine", df["Routine Name"].unique())
-    if st.button("Delete Selected"):
-        df_new = df[df["Routine Name"] != d_sel]
-        save_data("routines", df_new)
+    d_sel = st.selectbox("Select Routine to Delete", df["Routine Name"].unique())
+    if st.button("Delete"):
+        save_data("routines", df[df["Routine Name"] != d_sel])
         st.rerun()
 
 # ==========================================
@@ -342,7 +356,6 @@ elif page == "Routine Library":
 # ==========================================
 elif page == "Import Sheets":
     st.title("📂 Import Data")
-    
     tab_sched, tab_pb = st.tabs(["Import Plan CSV", "Import Powerbuilding"])
     
     with tab_sched:
@@ -372,6 +385,7 @@ elif page == "Import Sheets":
                     final_df = pd.concat([df_existing, new_df], ignore_index=True)
                     save_data("routines", final_df)
                     st.success(f"✅ Successfully extracted {len(routines)} routines!")
+                    st.info("Go to 'Today's Plan' to see the new columns (Notes, Rest, etc).")
                 else:
                     st.warning("No routines found. Check CSV format.")
             except Exception as e: st.error(f"Error parsing: {e}")
