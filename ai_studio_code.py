@@ -3,25 +3,33 @@ import pandas as pd
 import datetime
 import os
 import ast
+import numpy as np
 
 # ==========================================
-# 1. CONFIGURATION & CLEAN STYLING
+# 1. CONFIGURATION & STYLING
 # ==========================================
 st.set_page_config(page_title="25-26 Off-Season", page_icon="⚾", layout="wide")
 
-# Removed all custom white backgrounds. 
-# Using native Streamlit styling for maximum readability in Dark Mode.
+# Native Streamlit Styling (High Contrast / No Custom Colors)
 st.markdown("""
 <style>
-    /* Make the progress bar in the table look baseball-style (Green/Red) */
-    div[data-testid="stDataFrame"] {
-        width: 100%;
+    /* Increase font size for data tables for readability */
+    div[data-testid="stDataFrame"] { width: 100%; }
+    
+    /* Make the Metric Cards look clean */
+    div[data-testid="stMetric"] {
+        background-color: #f0f2f6;
+        border-radius: 8px;
+        padding: 10px;
+    }
+    @media (prefers-color-scheme: dark) {
+        div[data-testid="stMetric"] { background-color: #262730; }
     }
 </style>
 """, unsafe_allow_html=True)
 
 # ==========================================
-# 2. DATA STRUCTURE
+# 2. DATA HANDLING
 # ==========================================
 FILES = {
     "schedule": "schedule_data.csv",
@@ -69,23 +77,42 @@ def append_data(key, new_row_dict):
     updated_df.to_csv(FILES[key], index=False)
 
 # ==========================================
-# 3. PRECISE CSV PARSER (Powerbuilding)
+# 3. PARSER (Fixing Data Loading Issues)
 # ==========================================
+def extract_row_data(row):
+    """Helper to map CSV columns to Dict Keys based on your file structure"""
+    def get_val(idx):
+        try:
+            s = str(row[idx]).strip()
+            return "" if s == "nan" else s
+        except: return ""
+
+    # MAPPING BASED ON YOUR CSV:
+    # Col 2 (Index 2): Exercise
+    # Col 3 (Index 3): Warm-up Sets
+    # Col 4 (Index 4): Working Sets
+    # Col 5 (Index 5): Reps
+    # Col 6 (Index 6): Load (lbs)
+    # Col 7 (Index 7): %1RM
+    # Col 8 (Index 8): RPE
+    # Col 9 (Index 9): Rest
+    # Col 10 (Index 10): Notes
+    
+    return {
+        "Exercise": get_val(2),
+        "Warm": get_val(3),
+        "Work": get_val(4),
+        "Reps": get_val(5),
+        "Load": get_val(6),
+        "Percent": get_val(7),
+        "RPE": get_val(8),
+        "Rest": get_val(9),
+        "Notes": get_val(10)
+    }
+
 def parse_nippard_csv(file):
     """
-    Parses the CSV based on the exact columns provided in your sample.
-    Indices:
-    0: Empty
-    1: Week / Routine Name
-    2: Exercise
-    3: Warm-up Sets
-    4: Working Sets
-    5: Reps
-    6: Load (lbs)
-    7: %1RM
-    8: RPE
-    9: Rest
-    10: Notes
+    Parses the Powerbuilding CSV using the helper above.
     """
     df = pd.read_csv(file, header=None)
     
@@ -95,13 +122,14 @@ def parse_nippard_csv(file):
     current_exercises = []
     
     for index, row in df.iterrows():
-        # Helper to get column data safely
-        def get(idx):
-            val = str(row[idx]).strip()
-            return "" if val == "nan" else val
+        def get_val(idx):
+            try:
+                s = str(row[idx]).strip()
+                return "" if s == "nan" else s
+            except: return ""
 
-        col_1 = get(1) # Week or Routine
-        col_2 = get(2) # Exercise
+        col_1 = get_val(1) # Week / Routine
+        col_2 = get_val(2) # Exercise
         
         # 1. Detect Week Change
         if "Week" in col_1 and len(col_1) < 15:
@@ -109,10 +137,8 @@ def parse_nippard_csv(file):
             continue
 
         # 2. Detect New Routine Header
-        # It's a header if Col 1 has text, but Col 2 is empty (or is the header "Exercise")
         if col_1 and "Week" not in col_1 and "IMPORTANT" not in col_1 and "Jeff" not in col_1:
-            
-            # Save previous routine
+            # Save previous
             if current_routine_name and current_exercises:
                 extracted_routines.append({
                     "Routine Name": current_routine_name,
@@ -120,43 +146,20 @@ def parse_nippard_csv(file):
                     "Exercises": str(current_exercises)
                 })
             
-            # Start New Routine
+            # Start New
             clean_name = col_1.split(":")[0].strip()
             current_routine_name = f"{current_week} - {clean_name}"
             current_exercises = []
             
-            # SOMETIMES the first exercise is on the same row (Col 2)
+            # Check if first exercise is on same row (Col 2)
             if col_2 and col_2 != "Exercise":
-                ex_obj = {
-                    "Exercise": col_2,
-                    "Warm": get(3),
-                    "Work": get(4),
-                    "Reps": get(5),
-                    "Load": get(6),
-                    "Percent": get(7),
-                    "RPE": get(8),
-                    "Rest": get(9),
-                    "Notes": get(10)
-                }
-                current_exercises.append(ex_obj)
+                current_exercises.append(extract_row_data(row))
             continue
 
-        # 3. Detect Standard Exercise Row (Col 1 empty, Col 2 has exercise)
+        # 3. Detect Standard Exercise Row
         if not col_1 and col_2:
             if "Exercise" in col_2 or "Warm-up" in col_2: continue
-            
-            ex_obj = {
-                "Exercise": col_2,
-                "Warm": get(3),
-                "Work": get(4),
-                "Reps": get(5),
-                "Load": get(6),
-                "Percent": get(7),
-                "RPE": get(8),
-                "Rest": get(9),
-                "Notes": get(10)
-            }
-            current_exercises.append(ex_obj)
+            current_exercises.append(extract_row_data(row))
 
     # Save final routine
     if current_routine_name and current_exercises:
@@ -195,7 +198,7 @@ if page == "Today's Plan":
         st.stop()
     plan = today_plan.iloc[0]
 
-    # --- 1. INTENT & CONSTRAINT (Native Streamlit Containers) ---
+    # --- 1. INTENT & CONSTRAINT ---
     with st.container(border=True):
         c1, c2 = st.columns(2)
         with c1:
@@ -231,7 +234,7 @@ if page == "Today's Plan":
         else:
             st.write("Rest Day")
 
-    # --- 3. LIFTING (Corrected Columns) ---
+    # --- 3. LIFTING (DASHBOARD FIXES) ---
     l_plan = plan['Lifting Plan']
     st.subheader("🏋️ Strength")
     
@@ -239,7 +242,7 @@ if page == "Today's Plan":
         with st.container(border=True):
             wu = plan['Warm Up']
             st.markdown(f"**Lift:** {l_plan}")
-            st.caption(f"Warm Up: {wu if wu else 'Standard'}")
+            st.caption(f"Warm Up: {wu if wu else 'Standard'} {' | 🧘 Yoga' if plan['Yoga?']=='Yes' else ''}")
             
             # Search Logic
             routine_row = df_routines[df_routines["Routine Name"] == l_plan]
@@ -258,42 +261,34 @@ if page == "Today's Plan":
                         ex_name = ex.get("Exercise", "Unknown")
                         match = existing_logs[existing_logs["Exercise"] == ex_name]
                         
-                        # Calculate % for bar
-                        try:
-                            pct_val = float(str(ex.get("Percent", "0")).replace("%", "").split("-")[0]) / 100
-                        except: pct_val = 0.0
-
                         display_rows.append({
                             "Exercise": ex_name,
-                            "Sets": ex.get("Work", "3"), # 'Work' from parser map
+                            "Sets": ex.get("Work", "3"), 
                             "Reps": ex.get("Reps", "10"),
-                            "Load": ex.get("Load", "-"),
-                            
-                            # ACTUAL WEIGHT next to LOAD
+                            "Target Load": ex.get("Load", "-"), 
+                            # ACTUAL WEIGHT RIGHT NEXT TO TARGET
                             "Actual Weight": float(match.iloc[0]["Actual Weight"]) if not match.empty else 0.0,
-                            
-                            "%": pct_val,
                             "RPE": ex.get("RPE", "-"),
                             "Rest": ex.get("Rest", "-"),
                             "Notes": ex.get("Notes", ""),
                             "Done": not match.empty
                         })
                     
-                    # --- RENDER TABLE ---
+                    # --- RENDER TABLE WITH COLUMNS ---
                     edited_df = st.data_editor(
                         pd.DataFrame(display_rows),
                         column_config={
                             "Exercise": st.column_config.TextColumn(width="medium", disabled=True),
                             "Sets": st.column_config.TextColumn(width="small", disabled=True),
                             "Reps": st.column_config.TextColumn(width="small", disabled=True),
-                            "Load": st.column_config.TextColumn("Prescribed", width="small", disabled=True),
                             
-                            "Actual Weight": st.column_config.NumberColumn("Your Load", min_value=0, step=2.5),
+                            "Target Load": st.column_config.TextColumn("Target", width="small", disabled=True),
+                            "Actual Weight": st.column_config.NumberColumn("Actual", min_value=0, step=2.5),
                             
-                            "%": st.column_config.ProgressColumn("Int", min_value=0, max_value=1, format="%.0f%%"),
-                            "RPE": st.column_config.TextColumn(width="small", disabled=True),
-                            "Rest": st.column_config.TextColumn(width="small", disabled=True),
-                            "Notes": st.column_config.TextColumn(width="large", disabled=True),
+                            "RPE": st.column_config.TextColumn("RPE", width="small", disabled=True),
+                            "Rest": st.column_config.TextColumn("Rest", width="small", disabled=True),
+                            "Notes": st.column_config.TextColumn("Notes", width="large", disabled=True),
+                            
                             "Done": st.column_config.CheckboxColumn(width="small")
                         },
                         hide_index=True, 
@@ -307,7 +302,7 @@ if page == "Today's Plan":
                             if row["Done"] or row["Actual Weight"] > 0:
                                 new_rows.append({
                                     "Date": view_str, "Routine Name": l_plan, "Exercise": row["Exercise"],
-                                    "Set #": 1, "Prescribed Weight": row["Load"], 
+                                    "Set #": 1, "Prescribed Weight": row["Target Load"], 
                                     "Actual Weight": row["Actual Weight"], "Actual Reps": 0
                                 })
                         save_data("logs", pd.concat([df_clean, pd.DataFrame(new_rows)], ignore_index=True))
@@ -353,6 +348,18 @@ elif page == "Monthly Schedule":
         st.success("Updated!")
 
 # ==========================================
+# PAGE: ROUTINE LIBRARY
+# ==========================================
+elif page == "Routine Library":
+    st.title("📚 Library")
+    df = load_data("routines")
+    st.dataframe(df[["Routine Name", "Type"]], use_container_width=True)
+    d_sel = st.selectbox("Select Routine to Delete", df["Routine Name"].unique())
+    if st.button("Delete"):
+        save_data("routines", df[df["Routine Name"] != d_sel])
+        st.rerun()
+
+# ==========================================
 # PAGE: IMPORT SHEETS
 # ==========================================
 elif page == "Import Sheets":
@@ -386,18 +393,7 @@ elif page == "Import Sheets":
                     final_df = pd.concat([df_existing, new_df], ignore_index=True)
                     save_data("routines", final_df)
                     st.success(f"✅ Successfully extracted {len(routines)} routines!")
+                    st.info("Go to 'Today's Plan' to see the new columns.")
                 else:
                     st.warning("No routines found. Check CSV format.")
             except Exception as e: st.error(f"Error parsing: {e}")
-
-# ==========================================
-# PAGE: ROUTINE LIBRARY
-# ==========================================
-elif page == "Routine Library":
-    st.title("📚 Library")
-    df = load_data("routines")
-    st.dataframe(df[["Routine Name", "Type"]], use_container_width=True)
-    d_sel = st.selectbox("Select Routine to Delete", df["Routine Name"].unique())
-    if st.button("Delete"):
-        save_data("routines", df[df["Routine Name"] != d_sel])
-        st.rerun()
