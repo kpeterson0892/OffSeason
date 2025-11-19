@@ -376,4 +376,28 @@ elif page == "Import Sheets":
 
     with tab_pb:
         st.markdown("Upload **Jeff Nippard Powerbuilding** CSV.")
-        up_pb = st.file_uploader("N
+        up_pb = st.file_uploader("Nippard CSV", type=['csv'])
+        if up_pb:
+            try:
+                routines = parse_nippard_csv(up_pb)
+                if routines:
+                    df_existing = load_data("routines")
+                    new_df = pd.DataFrame(routines)
+                    final_df = pd.concat([df_existing, new_df], ignore_index=True)
+                    save_data("routines", final_df)
+                    st.success(f"✅ Successfully extracted {len(routines)} routines!")
+                else:
+                    st.warning("No routines found. Check CSV format.")
+            except Exception as e: st.error(f"Error parsing: {e}")
+
+# ==========================================
+# PAGE: ROUTINE LIBRARY
+# ==========================================
+elif page == "Routine Library":
+    st.title("📚 Library")
+    df = load_data("routines")
+    st.dataframe(df[["Routine Name", "Type"]], use_container_width=True)
+    d_sel = st.selectbox("Select Routine to Delete", df["Routine Name"].unique())
+    if st.button("Delete"):
+        save_data("routines", df[df["Routine Name"] != d_sel])
+        st.rerun()
