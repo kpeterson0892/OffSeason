@@ -6,7 +6,7 @@ import ast
 import numpy as np
 
 # ==========================================
-# 1. CONFIGURATION & STYLING
+# 1. CONFIGURATION
 # ==========================================
 st.set_page_config(page_title="25-26 Off-Season", page_icon="⚾", layout="wide")
 
@@ -14,7 +14,6 @@ st.markdown("""
 <style>
     .stApp { font-family: 'Segoe UI', sans-serif; }
     div[data-testid="stDataFrame"] { width: 100%; }
-    /* Clean Metric Cards */
     div[data-testid="stMetric"] {
         background-color: #f8f9fa;
         border: 1px solid #e9ecef;
@@ -74,34 +73,91 @@ def append_data(key, new_row_dict):
     updated_df.to_csv(FILES[key], index=False)
 
 # ==========================================
-# 3. ROBUST CSV PARSER (Forces All Columns)
+# 3. SMART CSV PARSER (Auto-Detects Columns)
 # ==========================================
-def parse_nippard_csv(file):
-    # FORCE read of 20 columns to prevent cutoff of Notes/Rest/RPE
-    df = pd.read_csv(file, header=None, names=list(range(20)))
+def parse_nippard_csv_smart(file):
+    """
+    Scans the file to find the header row containing 'Exercise', 'Load', etc.
+    Then uses those indices to map the data dynamically.
+    """
+    # Read file without header first to scan it
+    df_raw = pd.read_csv(file, header=None)
     
+    # 1. FIND HEADER ROW
+    header_idx = -1
+    col_map = {}
+    
+    # Keywords we look for
+    targets = {
+        "Exercise": ["Exercise"],
+        "Sets": ["Working Sets", "Sets"],
+        "Reps": ["Reps"],
+        "Load": ["Load", "Weight", "Lbs", "lbs"],
+        "RPE": ["RPE"],
+        "Rest": ["Rest"],
+        "Notes": ["Notes"]
+    }
+    
+    for i, row in df_raw.iterrows():
+        row_str = [str(x).strip() for x in row.values]
+        if "Exercise" in row_str:
+            header_idx = i
+            # Map columns
+            for col_idx, val in enumerate(row_str):
+                for key, keywords in targets.items():
+                    if any(k in val for k in keywords):
+                        col_map[key] = col_idx
+            break
+    
+    if header_idx == -1:
+        return None, "Could not find a row with 'Exercise' header."
+
+    # Default mapping if some are missing (fallback to your known structure)
+    # This handles if the smart detect misses one but finds others
+    if "Exercise" not in col_map: col_map["Exercise"] = 2
+    if "Sets" not in col_map: col_map["Sets"] = 4
+    if "Reps" not in col_map: col_map["Reps"] = 5
+    if "Load" not in col_map: col_map["Load"] = 6
+    if "RPE" not in col_map: col_map["RPE"] = 8
+    if "Rest" not in col_map: col_map["Rest"] = 9
+    if "Notes" not in col_map: col_map["Notes"] = 10
+
+    # 2. PARSE DATA
     extracted_routines = []
     current_week = "Week 1"
     current_routine_name = None
     current_exercises = []
     
-    for index, row in df.iterrows():
-        def get_val(idx):
-            try:
-                s = str(row[idx]).strip()
-                return "" if s == "nan" or s == "None" else s
-            except: return ""
+    # Iterate rows starting AFTER header
+    for index, row in df_raw.iterrows():
+        # Helper to get data using the map
+        def get(key):
+            if key in col_map and col_map[key] < len(row):
+                val = str(row[col_map[key]]).strip()
+                return "" if val == "nan" or val == "None" else val
+            return ""
 
-        col_1 = get_val(1) # Week / Routine
-        col_2 = get_val(2) # Exercise
+        # We still need to look at Col 1 (or 0) for the Routine Name
+        # usually Routine Name is to the LEFT of Exercise column
+        routine_col_idx = max(0, col_map["Exercise"] - 1)
         
-        # 1. Detect Week
-        if "Week" in col_1 and len(col_1) < 15:
-            current_week = col_1
+        try:
+            col_routine = str(row[routine_col_idx]).strip()
+            if col_routine == "nan": col_routine = ""
+        except: col_routine = ""
+        
+        col_ex = get("Exercise")
+        
+        # A. Detect Week
+        if "Week" in col_routine and len(col_routine) < 15:
+            current_week = col_routine
             continue
-
-        # 2. Detect New Session 
-        if col_1 and "Week" not in col_1 and "IMPORTANT" not in col_1 and "Jeff" not in col_1:
+            
+        # B. Detect New Routine
+        # It's a routine header if the Routine Column has text, but isn't "Exercise", "Week", etc.
+        if col_routine and "Week" not in col_routine and "Exercise" not in col_routine and "IMPORTANT" not in col_routine:
+            
+            # Save previous
             if current_routine_name and current_exercises:
                 extracted_routines.append({
                     "Routine Name": current_routine_name,
@@ -109,19 +165,37 @@ def parse_nippard_csv(file):
                     "Exercises": str(current_exercises)
                 })
             
-            clean_name = col_1.split(":")[0].strip()
+            clean_name = col_routine.split(":")[0].strip()
             current_routine_name = f"{current_week} - {clean_name}"
             current_exercises = []
             
-            if col_2 and col_2 != "Exercise":
-                current_exercises.append(extract_row_data(row))
+            # Sometimes first exercise is on same row
+            if col_ex and col_ex != "Exercise":
+                current_exercises.append({
+                    "Exercise": col_ex,
+                    "Sets": get("Sets"),
+                    "Reps": get("Reps"),
+                    "Load": get("Load"),
+                    "RPE": get("RPE"),
+                    "Rest": get("Rest"),
+                    "Notes": get("Notes")
+                })
             continue
+            
+        # C. Detect Exercise
+        if not col_routine and col_ex:
+            if "Exercise" in col_ex or "Warm-up" in col_ex: continue
+            current_exercises.append({
+                "Exercise": col_ex,
+                "Sets": get("Sets"),
+                "Reps": get("Reps"),
+                "Load": get("Load"),
+                "RPE": get("RPE"),
+                "Rest": get("Rest"),
+                "Notes": get("Notes")
+            })
 
-        # 3. Detect Exercise Row
-        if not col_1 and col_2:
-            if "Exercise" in col_2 or "Warm-up" in col_2: continue
-            current_exercises.append(extract_row_data(row))
-
+    # Save last one
     if current_routine_name and current_exercises:
         extracted_routines.append({
             "Routine Name": current_routine_name,
@@ -129,27 +203,7 @@ def parse_nippard_csv(file):
             "Exercises": str(current_exercises)
         })
         
-    return extracted_routines
-
-def extract_row_data(row):
-    def get_val(idx):
-        try:
-            s = str(row[idx]).strip()
-            return "" if s == "nan" or s == "None" else s
-        except: return ""
-
-    # Exact Mapping to your CSV structure
-    return {
-        "Exercise": get_val(2),
-        "Warm": get_val(3),
-        "Work": get_val(4),
-        "Reps": get_val(5),
-        "Load": get_val(6),
-        "Percent": get_val(7),
-        "RPE": get_val(8),  # This was getting cut off before
-        "Rest": get_val(9), # This too
-        "Notes": get_val(10) # And this
-    }
+    return extracted_routines, f"Success! Mapped columns: {col_map}"
 
 # ==========================================
 # 4. NAVIGATION
@@ -177,7 +231,7 @@ if page == "Today's Plan":
         st.stop()
     plan = today_plan.iloc[0]
 
-    # --- 1. INTENT ---
+    # INTENT CARD
     with st.container(border=True):
         c1, c2 = st.columns(2)
         with c1:
@@ -189,7 +243,7 @@ if page == "Today's Plan":
         if plan['Command Implement']:
             st.divider(); st.caption("🎯 COMMAND"); st.write(f"**{plan['Command Implement']}**")
 
-    # --- 2. THROWING ---
+    # THROWING
     t_plan = plan['Throwing Plan']
     st.subheader("⚾ Throwing")
     with st.container(border=True):
@@ -209,7 +263,7 @@ if page == "Today's Plan":
                     except: pass
         else: st.write("Rest Day")
 
-    # --- 3. LIFTING ---
+    # LIFTING
     l_plan = plan['Lifting Plan']
     st.subheader("🏋️ Strength")
     
@@ -220,7 +274,6 @@ if page == "Today's Plan":
             st.caption(f"Warm Up: {wu if wu else 'Standard'} {' | 🧘 Yoga' if plan['Yoga?']=='Yes' else ''}")
             
             routine_row = df_routines[df_routines["Routine Name"] == l_plan]
-            # Fuzzy Match
             if routine_row.empty:
                 mask = df_routines["Routine Name"].str.contains(l_plan, case=False, na=False)
                 if mask.any(): routine_row = df_routines[mask].iloc[[0]]
@@ -235,18 +288,12 @@ if page == "Today's Plan":
                         ex_name = ex.get("Exercise", "Unknown")
                         match = existing_logs[existing_logs["Exercise"] == ex_name]
                         
-                        # Percent Bar Calculation
-                        try:
-                            pct_val = float(str(ex.get("Percent", "0")).replace("%", "").split("-")[0]) / 100
-                        except: pct_val = 0.0
-
                         display_rows.append({
                             "Exercise": ex_name,
-                            "Sets": ex.get("Work", "-"), # Working Sets
+                            "Sets": ex.get("Sets", "-"),
                             "Reps": ex.get("Reps", "-"),
                             "Load": ex.get("Load", "-"),
                             "Actual Weight": float(match.iloc[0]["Actual Weight"]) if not match.empty else 0.0,
-                            "%": pct_val,
                             "RPE": ex.get("RPE", "-"),
                             "Rest": ex.get("Rest", "-"),
                             "Notes": ex.get("Notes", ""),
@@ -261,7 +308,6 @@ if page == "Today's Plan":
                             "Reps": st.column_config.TextColumn(width="small", disabled=True),
                             "Load": st.column_config.TextColumn("Target", width="small", disabled=True),
                             "Actual Weight": st.column_config.NumberColumn("Actual", min_value=0, step=2.5),
-                            "%": st.column_config.ProgressColumn("Int", min_value=0, max_value=1, format="%.0f%%"),
                             "RPE": st.column_config.TextColumn(width="small", disabled=True),
                             "Rest": st.column_config.TextColumn(width="small", disabled=True),
                             "Notes": st.column_config.TextColumn(width="large", disabled=True),
@@ -285,7 +331,7 @@ if page == "Today's Plan":
                         
                 except Exception as e: st.error(f"Error: {e}")
             else:
-                st.warning(f"Routine '{l_plan}' not found. Check Monthly Schedule names.")
+                st.warning("Routine not found. Check Names.")
     else: st.write("Rest Day")
 
 # ==========================================
@@ -323,18 +369,6 @@ elif page == "Monthly Schedule":
         st.success("Updated!")
 
 # ==========================================
-# PAGE: ROUTINE LIBRARY
-# ==========================================
-elif page == "Routine Library":
-    st.title("📚 Library")
-    df = load_data("routines")
-    st.dataframe(df[["Routine Name", "Type"]], use_container_width=True)
-    d_sel = st.selectbox("Select Routine to Delete", df["Routine Name"].unique())
-    if st.button("Delete"):
-        save_data("routines", df[df["Routine Name"] != d_sel])
-        st.rerun()
-
-# ==========================================
 # PAGE: IMPORT SHEETS
 # ==========================================
 elif page == "Import Sheets":
@@ -361,14 +395,26 @@ elif page == "Import Sheets":
         up_pb = st.file_uploader("Nippard CSV", type=['csv'])
         if up_pb:
             try:
-                routines = parse_nippard_csv(up_pb)
+                routines, msg = parse_nippard_csv_smart(up_pb)
                 if routines:
                     df_existing = load_data("routines")
                     new_df = pd.DataFrame(routines)
                     final_df = pd.concat([df_existing, new_df], ignore_index=True)
                     save_data("routines", final_df)
-                    st.success(f"✅ Successfully extracted {len(routines)} routines!")
-                    st.info("Go to 'Today's Plan' to view full details.")
+                    st.success(f"✅ Extracted {len(routines)} routines!")
+                    st.info(msg)
                 else:
-                    st.warning("No routines found. Check CSV format.")
+                    st.warning(f"No routines found. {msg}")
             except Exception as e: st.error(f"Error parsing: {e}")
+
+# ==========================================
+# PAGE: ROUTINE LIBRARY
+# ==========================================
+elif page == "Routine Library":
+    st.title("📚 Library")
+    df = load_data("routines")
+    st.dataframe(df[["Routine Name", "Type"]], use_container_width=True)
+    d_sel = st.selectbox("Select Routine to Delete", df["Routine Name"].unique())
+    if st.button("Delete"):
+        save_data("routines", df[df["Routine Name"] != d_sel])
+        st.rerun()
