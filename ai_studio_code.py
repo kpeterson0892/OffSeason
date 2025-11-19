@@ -14,7 +14,6 @@ st.markdown("""
     .stDataFrame { border-radius: 10px; overflow: hidden; }
     .stButton button { border-radius: 20px; font-weight: bold; }
     
-    /* Custom Box Styling for your specific fields */
     .metric-box {
         background-color: #f8f9fa;
         border: 1px solid #dee2e6;
@@ -23,13 +22,13 @@ st.markdown("""
         text-align: center;
     }
     .constraint-box {
-        background-color: #ffebee; /* Red tint */
+        background-color: #ffebee;
         border-left: 5px solid #ef5350;
         padding: 10px;
         border-radius: 5px;
     }
     .intent-box {
-        background-color: #e3f2fd; /* Blue tint */
+        background-color: #e3f2fd;
         border-left: 5px solid #42a5f5;
         padding: 10px;
         border-radius: 5px;
@@ -38,7 +37,7 @@ st.markdown("""
 """, unsafe_allow_html=True)
 
 # ==========================================
-# 2. DATA STRUCTURE (MATCHING YOUR SHEET)
+# 2. DATA STRUCTURE
 # ==========================================
 FILES = {
     "schedule": "schedule_data.csv",
@@ -47,17 +46,19 @@ FILES = {
     "velo": "velo_data.csv"
 }
 
-# EXACT COLUMNS FROM YOUR SHEET REQUEST
+# EXACT COLUMNS FROM YOUR CSV
 SCHED_COLS = [
     "Date", 
-    "Warm-Up", 
-    "Throwing", 
-    "Constraint", 
+    "Lifting Plan", 
+    "Warm Up", 
+    "Yoga?", 
+    "Throwing Plan", 
+    "Daily Constraint", 
     "Intent", 
-    "Command Implement", 
-    "Lift", 
-    "Distance", 
-    "Velo Goal"
+    "Long Toss Distance", 
+    "Mound Style", 
+    "Goal Velocity", 
+    "Command Implement"
 ]
 
 def load_data(key):
@@ -81,11 +82,12 @@ def load_data(key):
     df = pd.read_csv(FILES[key])
     
     if key == "schedule":
+        # Ensure Date is String
         df["Date"] = df["Date"].astype(str)
-        # Ensure all your specific columns exist
+        # Ensure all columns exist
         for col in SCHED_COLS:
             if col not in df.columns: df[col] = ""
-        # Fill NaNs
+        # Fill NaNs with empty strings to prevent display errors
         df = df.fillna("")
         
     return df
@@ -117,10 +119,11 @@ if page == "Today's Plan":
     df_routines = load_data("routines")
     df_logs = load_data("logs")
 
+    # Find Today
     today_plan = df_sched[df_sched["Date"] == today_str]
     
     if today_plan.empty:
-        st.warning("No plan found for today. Please check the Monthly Schedule.")
+        st.warning("No plan found for this date. (If you just uploaded a CSV, check if the Date format matched YYYY-MM-DD)")
         st.stop()
         
     plan = today_plan.iloc[0]
@@ -128,12 +131,17 @@ if page == "Today's Plan":
     # --- ROW 1: HIGH LEVEL INFO ---
     c1, c2, c3 = st.columns([1, 1, 1])
     
+    # Mapping your CSV headers to the display
+    constraint = plan.get('Daily Constraint', '')
+    intent = plan.get('Intent', '')
+    cmd_imp = plan.get('Command Implement', '')
+
     with c1:
-        st.markdown(f"<div class='constraint-box'><b>⚠️ Constraint</b><br>{plan['Constraint'] if plan['Constraint'] else '-'}</div>", unsafe_allow_html=True)
+        st.markdown(f"<div class='constraint-box'><b>⚠️ Constraint</b><br>{constraint if constraint else '-'}</div>", unsafe_allow_html=True)
     with c2:
-        st.markdown(f"<div class='intent-box'><b>🧠 Intent</b><br>{plan['Intent'] if plan['Intent'] else '-'}</div>", unsafe_allow_html=True)
+        st.markdown(f"<div class='intent-box'><b>🧠 Intent</b><br>{intent if intent else '-'}</div>", unsafe_allow_html=True)
     with c3:
-        st.markdown(f"<div class='intent-box'><b>🎯 Command Implement</b><br>{plan['Command Implement'] if plan['Command Implement'] else '-'}</div>", unsafe_allow_html=True)
+        st.markdown(f"<div class='intent-box'><b>🎯 Command Implement</b><br>{cmd_imp if cmd_imp else '-'}</div>", unsafe_allow_html=True)
 
     st.divider()
 
@@ -142,30 +150,30 @@ if page == "Today's Plan":
     
     with col_warm:
         st.subheader("🔥 Warm-Up")
-        if plan['Warm-Up']:
-            st.info(f"**Routine:** {plan['Warm-Up']}")
-            # Show details if available
-            r_row = df_routines[df_routines["Routine Name"] == plan['Warm-Up']]
-            if not r_row.empty:
-                try:
-                    ex_list = ast.literal_eval(r_row.iloc[0]["Exercises"])
-                    st.dataframe(pd.DataFrame(ex_list), hide_index=True)
-                except: pass
+        wu_name = str(plan.get('Warm Up', ''))
+        yoga = str(plan.get('Yoga?', ''))
+        
+        if wu_name or yoga == "Yes":
+            if wu_name: st.info(f"**Routine:** {wu_name}")
+            if yoga == "Yes": st.success("🧘 Yoga Session Prescribed")
         else:
-            st.write("No specific warm-up assigned.")
+            st.write("Standard Prep")
 
     with col_throw:
         st.subheader("⚾ Throwing")
-        if plan['Throwing']:
-            st.success(f"**Routine:** {plan['Throwing']}")
+        throw_name = plan.get('Throwing Plan', '')
+        
+        if throw_name:
+            st.success(f"**Routine:** {throw_name}")
             
             # Metrics Row
-            m1, m2 = st.columns(2)
-            m1.metric("Distance", plan['Distance'] if plan['Distance'] else "-")
-            m2.metric("Velo Goal", plan['Velo Goal'] if plan['Velo Goal'] else "-")
+            m1, m2, m3 = st.columns(3)
+            m1.metric("Distance", plan.get('Long Toss Distance', '-'))
+            m2.metric("Goal Velo", plan.get('Goal Velocity', '-'))
+            m3.metric("Mound", plan.get('Mound Style', '-'))
             
-            # Show details
-            r_row = df_routines[df_routines["Routine Name"] == plan['Throwing']]
+            # Show details if in library
+            r_row = df_routines[df_routines["Routine Name"] == throw_name]
             if not r_row.empty:
                 try:
                     ex_list = ast.literal_eval(r_row.iloc[0]["Exercises"])
@@ -178,20 +186,21 @@ if page == "Today's Plan":
                 append_data("velo", {"Date": today_str, "Velo": v})
                 st.success("Logged!")
         else:
-            st.write("Rest Day / No Throwing")
+            st.write("Rest Day")
 
     st.divider()
 
-    # --- ROW 3: LIFTING (POWER BUILDING) ---
-    st.subheader("🏋️ Lift: " + (plan['Lift'] if plan['Lift'] else "Rest"))
+    # --- ROW 3: LIFTING ---
+    lift_name = plan.get('Lifting Plan', '')
+    st.subheader("🏋️ Lift: " + (lift_name if lift_name else "Rest"))
     
-    if plan['Lift'] and plan['Lift'] != "Rest":
-        routine_row = df_routines[df_routines["Routine Name"] == plan['Lift']]
+    if lift_name:
+        routine_row = df_routines[df_routines["Routine Name"] == lift_name]
         
         if not routine_row.empty:
             try:
                 template_exercises = ast.literal_eval(routine_row.iloc[0]["Exercises"])
-                existing_logs = df_logs[(df_logs["Date"] == today_str) & (df_logs["Routine Name"] == plan['Lift'])]
+                existing_logs = df_logs[(df_logs["Date"] == today_str) & (df_logs["Routine Name"] == lift_name)]
                 
                 display_rows = []
                 for ex in template_exercises:
@@ -225,11 +234,11 @@ if page == "Today's Plan":
                 )
                 
                 if st.button("💾 Save Lift"):
-                    df_clean = df_logs[~((df_logs["Date"] == today_str) & (df_logs["Routine Name"] == plan['Lift']))]
+                    df_clean = df_logs[~((df_logs["Date"] == today_str) & (df_logs["Routine Name"] == lift_name))]
                     new_rows = []
                     for _, row in edited_df.iterrows():
                         new_rows.append({
-                            "Date": today_str, "Routine Name": plan['Lift'], "Exercise": row["Exercise"],
+                            "Date": today_str, "Routine Name": lift_name, "Exercise": row["Exercise"],
                             "Set #": 1, "Prescribed Weight": row["Target Wt"], 
                             "Actual Weight": row["Actual Wt"], "Actual Reps": row["Actual Reps"]
                         })
@@ -237,28 +246,20 @@ if page == "Today's Plan":
                     st.success("Lift Saved!")
             except Exception as e: st.error(f"Error loading lift: {e}")
         else:
-            st.info("Lift routine found in schedule but details missing from Library. Go to 'Import Sheets' to upload your Power Building sheet.")
+            st.info(f"Routine '{lift_name}' not found in library. Go to 'Import Sheets' to upload your Power Building CSV.")
 
 
 # ==========================================
-# PAGE: MONTHLY SCHEDULE (PLANNER)
+# PAGE: MONTHLY SCHEDULE
 # ==========================================
 elif page == "Monthly Schedule":
     st.title("🗓️ Monthly Schedule")
-    st.caption("Edit your 25-26 Off-Season Plan here.")
     
     df_sched = load_data("schedule")
     df_routines = load_data("routines")
     
-    # Dropdown Options
+    # Dropdowns
     routines = df_routines["Routine Name"].unique().tolist() if not df_routines.empty else []
-    lift_opts = [""] + [r for r in routines if "Lift" in str(df_routines[df_routines["Routine Name"]==r]["Type"].values)]
-    throw_opts = [""] + [r for r in routines if "Throwing" in str(df_routines[df_routines["Routine Name"]==r]["Type"].values)]
-    warm_opts = [""] + [r for r in routines if "Warm-Up" in str(df_routines[df_routines["Routine Name"]==r]["Type"].values)]
-    
-    # Fallback if types aren't set strictly
-    if not lift_opts: lift_opts = [""] + routines
-    if not throw_opts: throw_opts = [""] + routines
     
     # Date Picker
     col_date, col_table = st.columns([1, 4])
@@ -275,14 +276,10 @@ elif page == "Monthly Schedule":
             df_view,
             column_config={
                 "Date": st.column_config.TextColumn(disabled=True),
-                "Warm-Up": st.column_config.SelectboxColumn("Warm Up", options=warm_opts),
-                "Throwing": st.column_config.SelectboxColumn("Throwing", options=throw_opts),
-                "Lift": st.column_config.SelectboxColumn("Lift", options=lift_opts),
-                "Constraint": st.column_config.TextColumn("Constraint"),
-                "Intent": st.column_config.TextColumn("Intent"),
-                "Command Implement": st.column_config.TextColumn("Cmd Implement"),
-                "Distance": st.column_config.TextColumn("Dist"),
-                "Velo Goal": st.column_config.TextColumn("Velo Goal"),
+                "Lifting Plan": st.column_config.SelectboxColumn("Lift", options=[""]+routines),
+                "Throwing Plan": st.column_config.SelectboxColumn("Throwing", options=[""]+routines),
+                "Yoga?": st.column_config.TextColumn("Yoga (Yes/No)"),
+                "Goal Velocity": st.column_config.TextColumn("Goal Velo"), # Text for ranges like "~80"
             },
             hide_index=True, use_container_width=True, height=600
         )
@@ -319,7 +316,7 @@ elif page == "Routine Library":
             st.dataframe(pd.DataFrame(st.session_state.new_rout))
             
             c_name, c_type, c_save = st.columns([2, 1, 1])
-            name = c_name.text_input("Routine Name (e.g. Power Building Day 1)")
+            name = c_name.text_input("Routine Name (e.g. FB3)")
             r_type = c_type.selectbox("Category", ["Lifting", "Throwing", "Warm-Up"])
             
             if c_save.button("Save Routine"):
@@ -341,35 +338,42 @@ elif page == "Routine Library":
 # ==========================================
 elif page == "Import Sheets":
     st.title("📂 Import Data")
-    st.info("Upload your Power Building sheet or Master Schedule here.")
     
-    tab_sched, tab_pb = st.tabs(["Import Schedule", "Import Power Building"])
+    tab_sched, tab_pb = st.tabs(["Import Plan CSV", "Import Power Building"])
     
     with tab_sched:
-        st.markdown("Upload a CSV matching the 25-26 Off-Season columns.")
+        st.markdown("Upload your **25-26 Off-Season Plan** CSV.")
         up = st.file_uploader("Schedule CSV", type=['csv'])
         if up:
             try:
                 df = pd.read_csv(up)
-                # Basic validation
-                if "Constraint" in df.columns and "Intent" in df.columns:
+                
+                # DATE CONVERSION FIX
+                # Your CSV has dates like 11-20-25 (M-D-YY)
+                # App needs YYYY-MM-DD
+                if "Date" in df.columns:
+                    # Try to parse the format
+                    df['Date'] = pd.to_datetime(df['Date'], format='%m-%d-%y').dt.strftime('%Y-%m-%d')
+                
+                # Check headers
+                required = ["Lifting Plan", "Throwing Plan", "Daily Constraint"]
+                if any(col in df.columns for col in required):
+                    # Force columns to string to handle Velo ranges like "~80"
+                    df = df.astype(str)
+                    # Save
                     df.to_csv(FILES["schedule"], index=False)
-                    st.success("Schedule Imported!")
-                else: st.error("Headers don't match.")
-            except Exception as e: st.error(f"{e}")
+                    st.success("✅ Schedule Imported & Dates Fixed!")
+                else:
+                    st.error(f"Headers mismatch. Expected something like: {SCHED_COLS}")
+            except Exception as e: st.error(f"Error: {e}")
 
     with tab_pb:
-        st.markdown("""
-        **Import Power Building Lifts:**
-        Upload a CSV with columns: `Routine Name`, `Exercise`, `Sets`, `Reps`, `Weight`
-        """)
+        st.markdown("Import Power Building Lifts CSV.")
         up_pb = st.file_uploader("Power Building CSV", type=['csv'])
         if up_pb:
             try:
                 df_pb = pd.read_csv(up_pb)
-                # Logic to convert flat CSV to routine structure
-                # Group by Routine Name and create list of dicts
-                import_count = 0
+                count = 0
                 for name, group in df_pb.groupby("Routine Name"):
                     exercises = []
                     for _, row in group.iterrows():
@@ -379,12 +383,11 @@ elif page == "Import Sheets":
                             "Reps": row.get("Reps", ""),
                             "Weight": row.get("Weight", "")
                         })
-                    # Save
                     append_data("routines", {
                         "Routine Name": name,
                         "Type": "Lifting",
                         "Exercises": str(exercises)
                     })
-                    import_count += 1
-                st.success(f"Successfully imported {import_count} routines!")
+                    count += 1
+                st.success(f"Imported {count} routines!")
             except Exception as e: st.error(f"Error: {e}")
