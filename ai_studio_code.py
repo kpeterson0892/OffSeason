@@ -1,13 +1,86 @@
 import streamlit as st
 import pandas as pd
 import datetime
+import calendar
 import os
-import ast # Safe way to read lists stored as strings in CSV
+import ast
 
-# --- CONFIGURATION ---
+# ==========================================
+# 1. APPLE / IOS STYLING CONFIGURATION
+# ==========================================
 st.set_page_config(page_title="Ace Performance", page_icon="⚾", layout="wide")
 
-# --- DATA FILES ---
+# This CSS injects the "Apple Look" (Rounded corners, soft shadows, SF Font)
+apple_css = """
+<style>
+    /* Main Background - iOS Light Gray */
+    .stApp {
+        background-color: #F2F2F7;
+        font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+    }
+    
+    /* Card Styling (Like iOS Widgets) */
+    .css-card {
+        background-color: #FFFFFF;
+        border-radius: 18px;
+        padding: 20px;
+        box-shadow: 0 4px 12px rgba(0,0,0,0.05);
+        margin-bottom: 20px;
+    }
+    
+    /* Headers */
+    h1, h2, h3 {
+        color: #1C1C1E;
+        font-weight: 700;
+        letter-spacing: -0.5px;
+    }
+    
+    /* Inputs (Rounded Gray Fields) */
+    .stTextInput input, .stNumberInput input, .stSelectbox div[data-baseweb="select"] {
+        border-radius: 10px;
+        background-color: #E5E5EA; /* iOS Input Gray */
+        border: none;
+        color: #000;
+    }
+    
+    /* Buttons (Apple Blue Pills) */
+    .stButton button {
+        background-color: #007AFF;
+        color: white;
+        border-radius: 20px;
+        border: none;
+        font-weight: 600;
+        padding: 0.5rem 1rem;
+        box-shadow: 0 2px 5px rgba(0,122,255,0.2);
+        transition: all 0.2s;
+    }
+    .stButton button:hover {
+        background-color: #005ECB;
+        transform: scale(1.02);
+    }
+    
+    /* Remove Streamlit default decoration */
+    #MainMenu {visibility: hidden;}
+    footer {visibility: hidden;}
+    
+    /* Custom container for dashboard stats */
+    .stat-box {
+        text-align: center;
+        padding: 10px;
+        border-radius: 14px;
+        background: #F2F2F7;
+        margin: 5px;
+    }
+    .stat-val { font-size: 24px; font-weight: bold; color: #007AFF; }
+    .stat-label { font-size: 12px; color: #8E8E93; font-weight: 600; text-transform: uppercase; }
+
+</style>
+"""
+st.markdown(apple_css, unsafe_allow_html=True)
+
+# ==========================================
+# 2. DATA HANDLING
+# ==========================================
 FILES = {
     "schedule": "schedule_data.csv",
     "routines": "routines_library.csv",
@@ -16,283 +89,319 @@ FILES = {
     "bodyweight": "bw_data.csv"
 }
 
-# --- FUNCTIONS ---
 def load_data(key):
     if not os.path.exists(FILES[key]):
         if key == "routines":
-            # Structure: Routine Name | Type | Exercises (List of Dicts)
             return pd.DataFrame(columns=["Routine Name", "Type", "Exercises"])
         elif key == "schedule":
-            return pd.DataFrame(columns=["Date", "Throwing Routine", "Lifting Routine", "Custom Notes"])
+            # Create a default schedule for the current year to make the calendar editor work
+            dates = pd.date_range(start=f"{datetime.date.today().year}-01-01", end=f"{datetime.date.today().year}-12-31")
+            df = pd.DataFrame({"Date": dates})
+            df["Date"] = df["Date"].dt.strftime("%Y-%m-%d")
+            df["Throwing Routine"] = "Rest Day"
+            df["Lifting Routine"] = "Rest Day"
+            df["Custom Notes"] = ""
+            return df
+        elif key == "lifts":
+            return pd.DataFrame(columns=["Date", "Exercise", "Weight", "Reps"])
+        elif key == "velo":
+            return pd.DataFrame(columns=["Date", "Velo"])
+        elif key == "bodyweight":
+            return pd.DataFrame(columns=["Date", "Weight"])
         return pd.DataFrame()
-    return pd.read_csv(FILES[key])
+    
+    df = pd.read_csv(FILES[key])
+    # Ensure schedule has all dates if loaded from CSV (fill gaps)
+    if key == "schedule":
+        df["Date"] = df["Date"].astype(str)
+    return df
 
-def save_full_dataframe(key, df):
-    """Overwrites the entire CSV with the new dataframe (used for edits/deletes)"""
+def save_data(key, df):
     df.to_csv(FILES[key], index=False)
 
 def append_data(key, new_row_dict):
-    """Appends a single row to the CSV"""
     df = load_data(key)
     new_df = pd.DataFrame([new_row_dict])
     updated_df = pd.concat([df, new_df], ignore_index=True)
     updated_df.to_csv(FILES[key], index=False)
 
-# --- SIDEBAR ---
-st.sidebar.title("⚾ Ace Performance")
-page = st.sidebar.radio("Menu", [
-    "Daily Dashboard", 
-    "Routine Manager",   # Renamed
-    "Assign Schedule",   
-    "Track Lifts", 
-    "Track Velocity", 
-    "Track Bodyweight"
-])
+# ==========================================
+# 3. NAVIGATION
+# ==========================================
+# Using Columns as a top navigation bar for a more "App-like" feel
+col_nav1, col_nav2, col_nav3, col_nav4 = st.columns(4)
+with col_nav1:
+    if st.button("📅 Dashboard", use_container_width=True): st.session_state.page = "Dashboard"
+with col_nav2:
+    if st.button("🗓️ Planner", use_container_width=True): st.session_state.page = "Planner"
+with col_nav3:
+    if st.button("🛠️ Routines", use_container_width=True): st.session_state.page = "Routines"
+with col_nav4:
+    if st.button("📈 Tracking", use_container_width=True): st.session_state.page = "Tracking"
+
+if "page" not in st.session_state:
+    st.session_state.page = "Dashboard"
+
+page = st.session_state.page
 
 # ==========================================
-# PAGE: ROUTINE MANAGER (Create / Edit / Delete)
+# PAGE: DASHBOARD (The "Today" View)
 # ==========================================
-if page == "Routine Manager":
-    st.title("🛠️ Routine Manager")
+if page == "Dashboard":
+    st.title(f"Today")
+    st.markdown(f"<h3 style='color: #8E8E93; margin-top: -20px;'>{datetime.date.today().strftime('%A, %B %d')}</h3>", unsafe_allow_html=True)
     
-    tab1, tab2 = st.tabs(["➕ Create New", "✏️ Edit / Delete"])
-
-    # --- TAB 1: CREATE NEW ROUTINE ---
-    with tab1:
-        st.subheader("Build a New Routine")
-        
-        # We use a temporary dataframe in session state to build the list
-        if "new_routine_rows" not in st.session_state:
-            st.session_state.new_routine_rows = []
-
-        # 1. Add Exercises Form
-        with st.expander("Add Exercise Inputs", expanded=True):
-            c1, c2, c3 = st.columns([2, 1, 1])
-            ex_name = c1.text_input("Exercise Name", key="new_ex")
-            sets = c2.text_input("Sets", key="new_sets")
-            reps = c3.text_input("Reps", key="new_reps")
-            
-            c4, c5, c6 = st.columns([1, 1, 1])
-            weight = c4.text_input("Weight", key="new_weight")
-            rpe = c5.text_input("RPE", key="new_rpe")
-            tempo = c6.text_input("Tempo", key="new_tempo")
-
-            if st.button("Add to List"):
-                if ex_name:
-                    st.session_state.new_routine_rows.append({
-                        "Exercise": ex_name, "Sets": sets, "Reps": reps, 
-                        "Weight": weight, "RPE": rpe, "Tempo": tempo
-                    })
-                else:
-                    st.error("Exercise Name is required.")
-
-        # 2. Preview & Save
-        if len(st.session_state.new_routine_rows) > 0:
-            st.write("### Preview (You can edit this table directly before saving)")
-            
-            # Create a DataFrame from the list
-            df_preview = pd.DataFrame(st.session_state.new_routine_rows)
-            
-            # Allow user to edit the preview (delete rows, fix typos)
-            edited_df = st.data_editor(df_preview, num_rows="dynamic", key="create_editor")
-
-            st.divider()
-            col_a, col_b = st.columns(2)
-            with col_a:
-                r_name = st.text_input("Routine Name (e.g., Upper Hypertrophy)")
-            with col_b:
-                r_type = st.selectbox("Routine Type", ["Lifting", "Throwing"])
-
-            if st.button("💾 Save New Routine"):
-                if r_name:
-                    # Convert the edited dataframe back to a list of dicts
-                    final_exercises = edited_df.to_dict('records')
-                    
-                    append_data("routines", {
-                        "Routine Name": r_name,
-                        "Type": r_type,
-                        "Exercises": str(final_exercises) # Save as string
-                    })
-                    st.success(f"Saved '{r_name}'!")
-                    st.session_state.new_routine_rows = [] # Clear form
-                    st.rerun()
-                else:
-                    st.error("Please name the routine.")
-
-    # --- TAB 2: EDIT / DELETE EXISTING ---
-    with tab2:
-        st.subheader("Manage Existing Routines")
-        
-        df_library = load_data("routines")
-        
-        if df_library.empty:
-            st.info("No routines found. Go to 'Create New' first.")
-        else:
-            # Select Routine
-            routine_names = df_library["Routine Name"].unique()
-            selected_routine_name = st.selectbox("Select Routine to Edit", routine_names)
-            
-            # Get the row for this routine
-            current_row = df_library[df_library["Routine Name"] == selected_routine_name].iloc[0]
-            
-            # Parse the exercises string back into a list/dataframe
-            try:
-                current_exercises = ast.literal_eval(current_row["Exercises"])
-                df_exercises = pd.DataFrame(current_exercises)
-            except:
-                df_exercises = pd.DataFrame(columns=["Exercise", "Sets", "Reps"])
-
-            st.write(f"**Editing:** {selected_routine_name} ({current_row['Type']})")
-            
-            # EDITABLE TABLE
-            # num_rows="dynamic" allows you to add or delete rows directly in the UI
-            updated_exercises_df = st.data_editor(
-                df_exercises, 
-                num_rows="dynamic", 
-                use_container_width=True,
-                key="edit_editor"
-            )
-            
-            col_save, col_del = st.columns([1, 1])
-            
-            # UPDATE BUTTON
-            with col_save:
-                if st.button("✅ Update Routine"):
-                    # Convert back to list of dicts
-                    updated_list = updated_exercises_df.to_dict('records')
-                    
-                    # Update the specific row in the main dataframe
-                    df_library.loc[df_library["Routine Name"] == selected_routine_name, "Exercises"] = str(updated_list)
-                    
-                    # Save to CSV
-                    save_full_dataframe("routines", df_library)
-                    st.success("Routine updated successfully!")
-            
-            # DELETE BUTTON
-            with col_del:
-                if st.button("🗑️ Delete Routine", type="primary"):
-                    # Filter out the selected routine
-                    df_library = df_library[df_library["Routine Name"] != selected_routine_name]
-                    save_full_dataframe("routines", df_library)
-                    st.success(f"Deleted {selected_routine_name}")
-                    st.rerun()
-
-# ==========================================
-# PAGE: ASSIGN SCHEDULE
-# ==========================================
-elif page == "Assign Schedule":
-    st.title("🗓️ Plan Your Month")
-    
-    df_routines = load_data("routines")
-    
-    if not df_routines.empty:
-        lift_options = ["Rest Day"] + df_routines[df_routines["Type"] == "Lifting"]["Routine Name"].unique().tolist()
-        throw_options = ["Rest Day"] + df_routines[df_routines["Type"] == "Throwing"]["Routine Name"].unique().tolist()
-    else:
-        lift_options = ["Rest Day"]
-        throw_options = ["Rest Day"]
-
-    with st.form("assign_form"):
-        date = st.date_input("Select Date", datetime.date.today())
-        col1, col2 = st.columns(2)
-        with col1:
-            selected_throw = st.selectbox("Throwing Plan", throw_options)
-        with col2:
-            selected_lift = st.selectbox("Lifting Plan", lift_options)
-        notes = st.text_input("Custom Notes")
-        
-        if st.form_submit_button("Assign"):
-            # Simple append logic (The dashboard always reads the LAST entry for a specific date)
-            append_data("schedule", {
-                "Date": date,
-                "Throwing Routine": selected_throw,
-                "Lifting Routine": selected_lift,
-                "Custom Notes": notes
-            })
-            st.success(f"Schedule updated for {date}")
-
-# ==========================================
-# PAGE: DAILY DASHBOARD
-# ==========================================
-elif page == "Daily Dashboard":
-    st.title("📅 Today's Training")
     today_str = datetime.date.today().strftime("%Y-%m-%d")
-    
     df_sched = load_data("schedule")
     df_routines = load_data("routines")
     
+    # Get today's plan
     today_plan = df_sched[df_sched["Date"] == today_str]
     
     if not today_plan.empty:
-        plan = today_plan.iloc[-1] 
-        
-        # --- LIFTING ---
-        st.markdown(f"### 🏋️ Lifting: {plan['Lifting Routine']}")
-        if plan['Lifting Routine'] != "Rest Day":
-            row = df_routines[df_routines["Routine Name"] == plan['Lifting Routine']]
-            if not row.empty:
-                ex_list = ast.literal_eval(row.iloc[0]["Exercises"])
-                st.table(pd.DataFrame(ex_list))
-            else:
-                st.error("Routine not found (it might have been deleted).")
-        
-        st.divider()
-
-        # --- THROWING ---
-        st.markdown(f"### ⚾ Throwing: {plan['Throwing Routine']}")
-        if plan['Throwing Routine'] != "Rest Day":
-            row = df_routines[df_routines["Routine Name"] == plan['Throwing Routine']]
-            if not row.empty:
-                ex_list = ast.literal_eval(row.iloc[0]["Exercises"])
-                st.table(pd.DataFrame(ex_list))
-            else:
-                st.error("Routine not found.")
-
-        if pd.notna(plan['Custom Notes']) and plan['Custom Notes']:
-            st.info(f"📝 **Coach Notes:** {plan['Custom Notes']}")
-
+        plan = today_plan.iloc[0]
+        throw_name = plan.get("Throwing Routine", "Rest Day")
+        lift_name = plan.get("Lifting Routine", "Rest Day")
+        note = plan.get("Custom Notes", "")
     else:
-        st.info("No workout scheduled for today.")
+        throw_name = "Rest Day"
+        lift_name = "Rest Day"
+        note = ""
+
+    # --- THROWING CARD ---
+    with st.container():
+        st.markdown("<div class='css-card'>", unsafe_allow_html=True)
+        st.subheader("⚾ Throwing")
+        if throw_name == "Rest Day" or pd.isna(throw_name):
+            st.write("Recovery / Rest Day")
+        else:
+            st.write(f"**Routine:** {throw_name}")
+            row = df_routines[df_routines["Routine Name"] == throw_name]
+            if not row.empty and "Exercises" in row.columns:
+                try:
+                    ex_list = ast.literal_eval(row.iloc[0]["Exercises"])
+                    st.dataframe(pd.DataFrame(ex_list), hide_index=True, use_container_width=True)
+                except: st.write("No details found.")
+        st.markdown("</div>", unsafe_allow_html=True)
+
+    # --- LIFTING CARD ---
+    with st.container():
+        st.markdown("<div class='css-card'>", unsafe_allow_html=True)
+        st.subheader("🏋️ Lifting")
+        if lift_name == "Rest Day" or pd.isna(lift_name):
+            st.write("Recovery / Rest Day")
+        else:
+            st.write(f"**Routine:** {lift_name}")
+            row = df_routines[df_routines["Routine Name"] == lift_name]
+            if not row.empty and "Exercises" in row.columns:
+                try:
+                    ex_list = ast.literal_eval(row.iloc[0]["Exercises"])
+                    st.dataframe(pd.DataFrame(ex_list), hide_index=True, use_container_width=True)
+                except: st.write("No details found.")
+        st.markdown("</div>", unsafe_allow_html=True)
+
+    # --- NOTES CARD ---
+    if note and not pd.isna(note):
+        st.info(f"📝 **Note:** {note}")
+
 
 # ==========================================
-# PAGE: TRACKING (Lifts, Velo, Bodyweight)
+# PAGE: VISUAL PLANNER (The Month Editor)
 # ==========================================
-elif page == "Track Lifts":
-    st.title("🏋️ Log Lifts")
-    with st.form("lift"):
-        date = st.date_input("Date", datetime.date.today())
-        exercise = st.text_input("Exercise Name") 
-        weight = st.number_input("Weight Used", step=2.5)
-        reps = st.number_input("Reps Performed", step=1)
-        if st.form_submit_button("Log Set"):
-            append_data("lifts", {"Date": date, "Exercise": exercise, "Weight": weight, "Reps": reps})
-            st.success("Logged")
+elif page == "Planner":
+    st.title("🗓️ Schedule")
+    st.markdown("Select the month, then click the table cells to assign routines from the dropdowns.")
     
-    df = load_data("lifts")
-    if not df.empty:
-        st.subheader("History")
-        st.dataframe(df.sort_values("Date", ascending=False))
+    df_routines = load_data("routines")
+    df_sched = load_data("schedule")
+    
+    # Create dropdown options
+    if not df_routines.empty:
+        throw_opts = ["Rest Day"] + df_routines[df_routines["Type"] == "Throwing"]["Routine Name"].unique().tolist()
+        lift_opts = ["Rest Day"] + df_routines[df_routines["Type"] == "Lifting"]["Routine Name"].unique().tolist()
+    else:
+        throw_opts = ["Rest Day"]
+        lift_opts = ["Rest Day"]
 
-elif page == "Track Velocity":
-    st.title("🔥 Log Velocity")
-    with st.form("velo"):
-        date = st.date_input("Date", datetime.date.today())
-        velo = st.number_input("Max Velo (MPH)", step=0.1)
-        if st.form_submit_button("Log"):
-            append_data("velo", {"Date": date, "Velo": velo})
-            st.success("Logged")
-    df = load_data("velo")
-    if not df.empty:
-        st.line_chart(df, x="Date", y="Velo")
+    col1, col2 = st.columns([1, 3])
+    
+    with col1:
+        # Filter by Month
+        view_month = st.date_input("Jump to Date", datetime.date.today())
+        start_date = view_month.replace(day=1)
+        end_date = (start_date + pd.DateOffset(months=1)) - pd.DateOffset(days=1)
+        
+        st.caption("Tips: You can copy-paste rows in the table or drag the handle on the bottom right of a cell to fill down!")
 
-elif page == "Track Bodyweight":
-    st.title("⚖️ Log Bodyweight")
-    with st.form("bw"):
-        date = st.date_input("Date", datetime.date.today())
-        bw = st.number_input("Weight (lbs)", step=0.1)
-        if st.form_submit_button("Log"):
-            append_data("bodyweight", {"Date": date, "Weight": bw})
-            st.success("Logged")
-    df = load_data("bodyweight")
-    if not df.empty:
-        st.line_chart(df, x="Date", y="Weight")
+    with col2:
+        # Filter dataframe for this month
+        mask = (pd.to_datetime(df_sched['Date']) >= pd.to_datetime(start_date)) & \
+               (pd.to_datetime(df_sched['Date']) <= pd.to_datetime(end_date))
+        
+        df_view = df_sched.loc[mask].copy()
+        
+        # CONFIG: Make the columns dropdowns using st.column_config
+        edited_df = st.data_editor(
+            df_view,
+            column_config={
+                "Date": st.column_config.TextColumn(disabled=True), # Lock date
+                "Throwing Routine": st.column_config.SelectboxColumn(
+                    "Throwing",
+                    options=throw_opts,
+                    required=True,
+                    width="medium"
+                ),
+                "Lifting Routine": st.column_config.SelectboxColumn(
+                    "Lifting",
+                    options=lift_opts,
+                    required=True,
+                    width="medium"
+                ),
+                "Custom Notes": st.column_config.TextColumn("Notes")
+            },
+            hide_index=True,
+            use_container_width=True,
+            height=600,
+            key="scheduler_editor"
+        )
+
+        if st.button("💾 Save Schedule Changes"):
+            # Update the main dataframe with changes
+            df_sched.set_index("Date", inplace=True)
+            edited_df.set_index("Date", inplace=True)
+            df_sched.update(edited_df)
+            df_sched.reset_index(inplace=True)
+            save_data("schedule", df_sched)
+            st.success("Schedule Updated!")
+
+
+# ==========================================
+# PAGE: ROUTINE BUILDER (Apple Style)
+# ==========================================
+elif page == "Routines":
+    st.title("🛠️ Routines")
+    
+    tab1, tab2 = st.tabs(["Create", "Library"])
+    
+    with tab1:
+        st.markdown("<div class='css-card'>", unsafe_allow_html=True)
+        st.subheader("New Routine")
+        
+        if "new_routine_rows" not in st.session_state:
+            st.session_state.new_routine_rows = []
+
+        # Input Row
+        c1, c2, c3, c4 = st.columns([3, 1, 1, 1])
+        ex = c1.text_input("Exercise")
+        s = c2.text_input("Sets")
+        r = c3.text_input("Reps")
+        w = c4.text_input("Weight/RPE")
+        
+        if st.button("➕ Add Exercise"):
+            if ex:
+                st.session_state.new_routine_rows.append({"Exercise": ex, "Sets": s, "Reps": r, "Weight": w})
+
+        # Preview Table
+        if st.session_state.new_routine_rows:
+            st.markdown("---")
+            preview_df = pd.DataFrame(st.session_state.new_routine_rows)
+            edited_preview = st.data_editor(preview_df, num_rows="dynamic", use_container_width=True)
+            
+            col_name, col_type, col_save = st.columns([2, 1, 1])
+            r_name = col_name.text_input("Routine Name", placeholder="e.g. Leg Day A")
+            r_type = col_type.selectbox("Type", ["Lifting", "Throwing"])
+            
+            if col_save.button("Save Routine"):
+                if r_name:
+                    final_data = edited_preview.to_dict('records')
+                    append_data("routines", {
+                        "Routine Name": r_name, "Type": r_type, "Exercises": str(final_data)
+                    })
+                    st.success(f"Saved {r_name}!")
+                    st.session_state.new_routine_rows = []
+                    st.rerun()
+        st.markdown("</div>", unsafe_allow_html=True)
+
+    with tab2:
+        df_lib = load_data("routines")
+        if not df_lib.empty:
+            for index, row in df_lib.iterrows():
+                st.markdown("<div class='css-card'>", unsafe_allow_html=True)
+                c1, c2 = st.columns([4, 1])
+                c1.markdown(f"### {row['Routine Name']}")
+                c1.caption(row['Type'])
+                
+                if c2.button("🗑️", key=f"del_{index}"):
+                    df_lib = df_lib.drop(index)
+                    save_data("routines", df_lib)
+                    st.rerun()
+                    
+                with st.expander("View Exercises"):
+                    try:
+                        ex_data = ast.literal_eval(row["Exercises"])
+                        st.table(pd.DataFrame(ex_data))
+                    except: st.write("Error loading details.")
+                st.markdown("</div>", unsafe_allow_html=True)
+
+
+# ==========================================
+# PAGE: TRACKING (Clean Metrics)
+# ==========================================
+elif page == "Tracking":
+    st.title("📈 Progress")
+    
+    # Apple Health Style Top Cards
+    df_velo = load_data("velo")
+    df_lifts = load_data("lifts")
+    df_bw = load_data("bodyweight")
+    
+    c1, c2, c3 = st.columns(3)
+    with c1:
+        max_v = df_velo["Velo"].max() if not df_velo.empty else 0
+        st.markdown(f"<div class='stat-box'><div class='stat-val'>{max_v} MPH</div><div class='stat-label'>Top Velo</div></div>", unsafe_allow_html=True)
+    with c2:
+        curr_bw = df_bw.iloc[-1]["Weight"] if not df_bw.empty else 0
+        st.markdown(f"<div class='stat-box'><div class='stat-val'>{curr_bw} lbs</div><div class='stat-label'>Bodyweight</div></div>", unsafe_allow_html=True)
+    with c3:
+        lifts_logged = len(df_lifts)
+        st.markdown(f"<div class='stat-box'><div class='stat-val'>{lifts_logged}</div><div class='stat-label'>Sets Logged</div></div>", unsafe_allow_html=True)
+
+    st.markdown("---")
+
+    # Logging Area
+    tab_l, tab_v, tab_b = st.tabs(["Lifts", "Velocity", "Bodyweight"])
+    
+    with tab_l:
+        with st.form("log_lift"):
+            c1, c2, c3 = st.columns(3)
+            l_date = c1.date_input("Date")
+            l_ex = c2.text_input("Exercise")
+            l_wt = c3.number_input("Weight", step=5)
+            if st.form_submit_button("Log Lift"):
+                append_data("lifts", {"Date": l_date, "Exercise": l_ex, "Weight": l_wt, "Reps": 0})
+                st.success("Logged")
+        
+        if not df_lifts.empty:
+            st.line_chart(df_lifts, x="Date", y="Weight")
+
+    with tab_v:
+        with st.form("log_velo"):
+            c1, c2 = st.columns(2)
+            v_date = c1.date_input("Date")
+            v_mph = c2.number_input("MPH", step=0.1)
+            if st.form_submit_button("Log Velo"):
+                append_data("velo", {"Date": v_date, "Velo": v_mph})
+                st.success("Logged")
+        if not df_velo.empty:
+            st.line_chart(df_velo, x="Date", y="Velo")
+            
+    with tab_b:
+        with st.form("log_bw"):
+            c1, c2 = st.columns(2)
+            b_date = c1.date_input("Date")
+            b_lbs = c2.number_input("Weight", step=0.1)
+            if st.form_submit_button("Log Weight"):
+                append_data("bodyweight", {"Date": b_date, "Weight": b_lbs})
+                st.success("Logged")
+        if not df_bw.empty:
+            st.line_chart(df_bw, x="Date", y="Weight")
