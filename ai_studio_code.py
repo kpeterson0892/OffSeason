@@ -79,11 +79,12 @@ def append_data(key, new_row_dict):
     updated_df.to_csv(FILES[key], index=False)
 
 # ==========================================
-# 3. CUSTOM PARSER FOR NIPPARD SHEET
+# 3. FIXED PARSER FOR NIPPARD SHEET
 # ==========================================
 def parse_nippard_csv(file):
     """
-    Parses the complex Jeff Nippard Powerbuilding CSV structure.
+    Parses the Jeff Nippard Powerbuilding CSV structure.
+    Adjusted for CSVs where Column A is empty and data starts in Column B.
     """
     # Read without header because the header is messy
     df = pd.read_csv(file, header=None)
@@ -96,17 +97,23 @@ def parse_nippard_csv(file):
     
     # Iterate through every row
     for index, row in df.iterrows():
-        col_a = str(row[0]).strip() # Often Session Name
-        col_b = str(row[1]).strip() # Often Week or Exercise
+        # Col A (0) is usually empty in your file
+        # Col B (1) contains Week info or Routine Names
+        # Col C (2) contains Exercise Names
+        
+        val_1 = str(row[1]).strip() # Column B
+        val_2 = str(row[2]).strip() # Column C (Exercise)
         
         # 1. Detect Week Change (e.g., "Week 1", "Week 2")
-        if "Week" in col_b and len(col_b) < 10:
-            current_week = col_b
+        if "Week" in val_1 and len(val_1) < 15:
+            current_week = val_1
             continue
 
-        # 2. Detect New Session (Col A has text like "Full Body 1" or "Lower #1")
-        # We ignore rows that are empty, 'nan', or Disclaimer text
-        if col_a != "nan" and col_a != "" and "IMPORTANT" not in col_a and "Jeff Nippard" not in col_a:
+        # 2. Detect New Session 
+        # It is a session if Col B has text, but it is NOT "Week" and NOT "Exercise"
+        # Also ignoring metadata rows
+        if val_1 != "nan" and val_1 != "" and "Week" not in val_1 and "Exercise" not in val_1 and "IMPORTANT" not in val_1:
+            
             # Save previous routine if exists
             if current_routine_name and current_exercises:
                 extracted_routines.append({
@@ -116,37 +123,34 @@ def parse_nippard_csv(file):
                 })
             
             # Start new routine
-            # Clean the name (remove : colon details)
-            clean_name = col_a.split(":")[0]
+            clean_name = val_1.split(":")[0] # Remove description after colon
             current_routine_name = f"{current_week} - {clean_name}"
             current_exercises = []
             
-            # The first exercise is often on the SAME row as the session title in this sheet
-            # Check if Col B has an exercise on this row
-            if col_b != "nan" and col_b != "Exercise":
+            # CRITICAL: In your sheet, the first exercise is often on the SAME ROW as the routine name (in Col C)
+            if val_2 != "nan" and val_2 != "" and val_2 != "Exercise":
+                 # Col E (4) = Working Sets, F (5) = Reps, G (6) = Load
                 ex_obj = {
-                    "Exercise": col_b,
-                    "Sets": str(row[3]) if str(row[3]) != "nan" else "3",
-                    "Reps": str(row[4]) if str(row[4]) != "nan" else "10",
-                    "Weight": str(row[5]) if str(row[5]) != "nan" else "-"
+                    "Exercise": val_2,
+                    "Sets": str(row[4]) if str(row[4]) != "nan" else "3",
+                    "Reps": str(row[5]) if str(row[5]) != "nan" else "10",
+                    "Weight": str(row[6]) if str(row[6]) != "nan" else "-"
                 }
                 current_exercises.append(ex_obj)
             continue
 
-        # 3. Detect Exercise Rows
-        # Col A is empty/nan, Col B has text
-        if (col_a == "nan" or col_a == "") and (col_b != "nan" and col_b != ""):
-            # Skip rows that are headers
-            if "Exercise" in col_b or "Warm-up" in col_b:
+        # 3. Detect Exercise Rows (Col B is empty, Col C has exercise)
+        if (val_1 == "nan" or val_1 == "") and (val_2 != "nan" and val_2 != ""):
+            # Skip headers
+            if "Exercise" in val_2 or "Warm-up" in val_2:
                 continue
                 
             # It's an exercise
             ex_obj = {
-                "Exercise": col_b,
-                # Col D (index 3) is usually Working Sets in this sheet
-                "Sets": str(row[3]) if str(row[3]) != "nan" else "3",
-                "Reps": str(row[4]) if str(row[4]) != "nan" else "10",
-                "Weight": str(row[5]) if str(row[5]) != "nan" else "-"
+                "Exercise": val_2,
+                "Sets": str(row[4]) if str(row[4]) != "nan" else "3",
+                "Reps": str(row[5]) if str(row[5]) != "nan" else "10",
+                "Weight": str(row[6]) if str(row[6]) != "nan" else "-"
             }
             current_exercises.append(ex_obj)
 
@@ -233,18 +237,18 @@ if page == "Today's Plan":
         if l_plan:
             st.markdown(f"## {l_plan}")
             
-            # Try to find routine
-            # Logic: If exact name exists, use it. If not, check if user selected short name (e.g. FB1)
-            # but loaded long name (Week 1 - Full Body 1).
-            
+            # 1. Exact Match Check
             routine_row = df_routines[df_routines["Routine Name"] == l_plan]
             
-            # Fallback: Search for partial match if exact fails
+            # 2. Fuzzy Match / Short Name Check (e.g. User has 'FB1' in schedule but 'Week 1 - Full Body 1' in library)
             if routine_row.empty:
-                # Check if "FB1" is inside "Week 1 - Full Body 1" (hard to map automatically)
-                # Just show warning to update schedule
-                st.warning(f"Routine '{l_plan}' not found. If you imported the Powerbuilding sheet, go to 'Monthly Schedule' and select the full name (e.g., 'Week 1 - Full Body 1').")
-            else:
+                # Try to find a routine that CONTAINS this text
+                mask = df_routines["Routine Name"].str.contains(l_plan, case=False, na=False)
+                if mask.any():
+                    routine_row = df_routines[mask].iloc[[0]] # Take first match
+                    st.info(f"Matched short name '{l_plan}' to '{routine_row.iloc[0]['Routine Name']}'")
+            
+            if not routine_row.empty:
                 try:
                     template_exercises = ast.literal_eval(routine_row.iloc[0]["Exercises"])
                     existing_logs = df_logs[(df_logs["Date"] == view_str) & (df_logs["Routine Name"] == l_plan)]
@@ -276,6 +280,8 @@ if page == "Today's Plan":
                         save_data("logs", pd.concat([df_clean, pd.DataFrame(new_rows)], ignore_index=True))
                         st.success("Saved!")
                 except: st.error("Error parsing routine.")
+            else:
+                st.warning(f"Routine '{l_plan}' not found. Check 'Routine Library' to see exact names.")
         else:
             st.markdown("## Rest Day")
 
@@ -287,8 +293,7 @@ elif page == "Monthly Schedule":
     df_sched = load_data("schedule")
     df_routines = load_data("routines")
     
-    # Get list of lifting routines
-    lift_opts = [""] + sorted([r for r in df_routines["Routine Name"].unique() if "Week" in r or "Full Body" in r or "Upper" in r or "Lower" in r])
+    lift_opts = [""] + sorted([r for r in df_routines["Routine Name"].unique()])
     
     col_d, col_t = st.columns([1, 3])
     with col_d:
@@ -362,16 +367,11 @@ elif page == "Import Sheets":
             try:
                 routines = parse_nippard_csv(up_pb)
                 if routines:
-                    # Load existing routines to append
                     df_existing = load_data("routines")
                     new_df = pd.DataFrame(routines)
-                    
-                    # Filter out duplicates if needed, or just append
                     final_df = pd.concat([df_existing, new_df], ignore_index=True)
                     save_data("routines", final_df)
-                    
-                    st.success(f"✅ Successfully extracted {len(routines)} routines! (e.g., '{routines[0]['Routine Name']}')")
-                    st.info("Go to 'Monthly Schedule' to assign these new routines to your days.")
+                    st.success(f"✅ Successfully extracted {len(routines)} routines!")
                 else:
                     st.warning("No routines found. Check CSV format.")
             except Exception as e: st.error(f"Error parsing: {e}")
